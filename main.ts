@@ -1,106 +1,102 @@
-// WORLD NEWS — Thursday, 19 November 2026.
-// A one-page newspaper drawn from scratch: own 5x7 bitmap font, own
-// grayscale framebuffer, own PNG encoder. Node 22 standard library only,
-// no network, fully deterministic (the day's news is baked into the code).
+// WORLD NEWS - Thursday, 19 November 2026
+// A one-day newspaper front page, drawn entirely with code.
+// Node 22 standard library only. No network, no randomness, no clock.
+// Fully deterministic: the same input always produces the same PNG bytes.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
-import * as crypto from "node:crypto";
 
+// ---------------------------------------------------------------------------
+// STORY TEXT
+// ---------------------------------------------------------------------------
+
+// LEAD - ICJ VERDICT, 19 NOV 2026 (confirmed outcome)
+// Myanmar found responsible for genocide against the Rohingya.
+// Sources: Wikipedia "Rohingya genocide case", agentictribune,
+// Al Jazeera, Reuters live.
+const LEAD_KICKER = "THE HAGUE - INTERNATIONAL JUSTICE";
+const LEAD_HEADLINE = "WORLD COURT: MYANMAR COMMITTED GENOCIDE";
+const LEAD_DECK =
+  "THE INTERNATIONAL COURT OF JUSTICE HAS FOUND MYANMAR RESPONSIBLE FOR " +
+  "GENOCIDE AGAINST THE ROHINGYA. THE ONLY REASONABLE INFERENCE, IT SAID, " +
+  "WAS AN INTENT TO DESTROY THE GROUP IN NORTHERN RAKHINE. FINAL AND BINDING.";
+const LEAD_FACTS =
+  "ABOUT 10,000 KILLED IN 2017. MORE THAN 730,000 FLED. READ BY PRESIDENT " +
+  "YUJI IWASAWA.";
+
+const STORY2_KICKER = "SHENZHEN - DIPLOMACY";
+const STORY2_HEADLINE = "TRUMP, XI AND PUTIN HOLD FIRST THREE-WAY SUMMIT";
+const STORY2_DECK =
+  "LEADERS MEET IN SHENZHEN ON THE APEC SIDELINES AS THE NUCLEAR PACT " +
+  "LIES EXPIRED. NO DEAL IS EXPECTED.";
+// Sources: Yonhap, AnewZ, AJP
+
+const STORY3_KICKER = "TECHNOLOGY - MARKETS";
+const STORY3_HEADLINE = "ANTHROPIC PRICES RECORD $81BN IPO AT $83";
+const STORY3_DECK =
+  "THE CLAUDE MAKER'S SHARES BEGIN TRADING TODAY ON NASDAQ AS ANT.";
+// Sources: Anthropic pricing announcement, Nasdaq notice
+
+const STORY4_KICKER = "CULTURE - GAMES";
+const STORY4_HEADLINE = "VICE CITY OPENS AS GTA VI ROLLS OUT";
+const STORY4_DECK =
+  "AFTER 13 YEARS, A RECORD 99 ON METACRITIC. 17M COPIES PRE-SOLD.";
+// Sources: Reuters, AAP, AsiaToday
+
+const STORY5_KICKER = "BANGLADESH - UNREST";
+const STORY5_HEADLINE = "BANGLADESH BURNS AS YUNUS HOME TORCHED";
+const STORY5_DECK =
+  "LOCKDOWN SHUTS PARTS OF THE COUNTRY. 28 DISTRICTS HIT BY BOMBS AND ARSON.";
+// Sources: Reuters, The Hindu BusinessLine
+
+const BRIEFS: string[] = [
+  "CRIMEA BRIDGE HIT FOR A THIRD TIME IN A WEEK. TRAFFIC HALTED.",
+  "VAN GOGH SELLS FOR A RECORD $190.4M AT SOTHEBY'S NEW YORK.",
+  "COP31 MINISTERS WRESTLE OVER A DRAFT DEAL IN ANTALYA. TALKS CLOSE FRIDAY.",
+  "IAEA: NORTH KOREA EXPANDED URANIUM ENRICHMENT AT YONGBYON.",
+  "US AND VENEZUELA SIGN A MILITARY COOPERATION AGREEMENT.",
+];
+
+// ---------------------------------------------------------------------------
+// CANVAS
+// ---------------------------------------------------------------------------
 const W = 1024;
 const H = 1024;
-const PAPER = 247; // warm newsprint grey
-const INK = 26; // near-black ink
-const SOFT = 110; // secondary grey for rules and shading
+const PAPER: number[] = [246, 243, 236];
+const INK: number[] = [17, 17, 17];
+const RED: number[] = [178, 34, 52];
+const BLUE: number[] = [40, 70, 140];
+const GOLD: number[] = [212, 160, 30];
+const ORANGE: number[] = [205, 70, 20];
+const YELLOW: number[] = [238, 178, 40];
+const GREY: number[] = [110, 108, 100];
 
-// ---------------------------------------------------------------- font --
-// Own 5x7 bitmap font. Each glyph is 7 rows of 5 bits, stored as numbers.
-// Only the glyphs the paper needs: A-Z, 0-9, space and common punctuation.
-const FONT: Record<string, number[]> = {
-  A: [14, 17, 17, 31, 17, 17, 17],
-  B: [30, 17, 17, 30, 17, 17, 30],
-  C: [14, 17, 16, 16, 16, 17, 14],
-  D: [30, 17, 17, 17, 17, 17, 30],
-  E: [31, 16, 16, 30, 16, 16, 31],
-  F: [31, 16, 16, 30, 16, 16, 16],
-  G: [14, 17, 16, 23, 17, 17, 15],
-  H: [17, 17, 17, 31, 17, 17, 17],
-  I: [14, 4, 4, 4, 4, 4, 14],
-  J: [7, 2, 2, 2, 2, 18, 12],
-  K: [17, 18, 20, 24, 20, 18, 17],
-  L: [16, 16, 16, 16, 16, 16, 31],
-  M: [17, 27, 21, 21, 17, 17, 17],
-  N: [17, 25, 21, 19, 17, 17, 17],
-  O: [14, 17, 17, 17, 17, 17, 14],
-  P: [30, 17, 17, 30, 16, 16, 16],
-  Q: [14, 17, 17, 17, 21, 18, 13],
-  R: [30, 17, 17, 30, 20, 18, 17],
-  S: [15, 16, 16, 14, 1, 1, 30],
-  T: [31, 4, 4, 4, 4, 4, 4],
-  U: [17, 17, 17, 17, 17, 17, 14],
-  V: [17, 17, 17, 17, 17, 10, 4],
-  W: [17, 17, 17, 21, 21, 27, 17],
-  X: [17, 17, 10, 4, 10, 17, 17],
-  Y: [17, 17, 10, 4, 4, 4, 4],
-  Z: [31, 1, 2, 4, 8, 16, 31],
-  "0": [14, 17, 19, 21, 25, 17, 14],
-  "1": [4, 12, 4, 4, 4, 4, 14],
-  "2": [14, 17, 1, 6, 8, 16, 31],
-  "3": [31, 2, 4, 2, 1, 17, 14],
-  "4": [2, 6, 10, 18, 31, 2, 2],
-  "5": [31, 16, 30, 1, 1, 17, 14],
-  "6": [6, 8, 16, 30, 17, 17, 14],
-  "7": [31, 1, 2, 4, 8, 8, 8],
-  "8": [14, 17, 17, 14, 17, 17, 14],
-  "9": [14, 17, 17, 15, 1, 2, 12],
-  " ": [0, 0, 0, 0, 0, 0, 0],
-  ".": [0, 0, 0, 0, 0, 12, 12],
-  ",": [0, 0, 0, 0, 12, 4, 8],
-  ":": [0, 12, 12, 0, 12, 12, 0],
-  ";": [0, 12, 12, 0, 12, 4, 8],
-  "!": [4, 4, 4, 4, 4, 0, 4],
-  "?": [14, 17, 1, 6, 4, 0, 4],
-  "'": [4, 4, 8, 0, 0, 0, 0],
-  '"': [10, 10, 0, 0, 0, 0, 0],
-  "-": [0, 0, 0, 14, 0, 0, 0],
-  "(": [2, 4, 8, 8, 8, 4, 2],
-  ")": [8, 4, 2, 2, 2, 4, 8],
-  "/": [1, 2, 2, 4, 8, 8, 16],
-  "&": [12, 18, 20, 8, 21, 18, 13],
-  "%": [25, 26, 2, 4, 8, 11, 19],
-  "$": [4, 15, 20, 14, 5, 30, 4],
-  "+": [0, 4, 4, 31, 4, 4, 0],
-  "=": [0, 0, 31, 0, 31, 0, 0],
-};
+const px = new Uint8Array(W * H * 3);
 
-// ---------------------------------------------------------- framebuffer --
-const fb = Buffer.alloc(W * H, PAPER);
-
-function px(x: number, y: number, c: number): void {
+function setPx(x: number, y: number, c: number[]): void {
   if (x < 0 || x >= W || y < 0 || y >= H) return;
-  fb[y * W + x] = c;
+  const i = (y * W + x) * 3;
+  px[i] = c[0];
+  px[i + 1] = c[1];
+  px[i + 2] = c[2];
 }
 
-function rect(x: number, y: number, w: number, h: number, c: number): void {
-  for (let j = y; j < y + h; j++) {
-    for (let i = x; i < x + w; i++) px(i, j, c);
+function fillRect(x: number, y: number, w: number, h: number, c: number[]): void {
+  const x0 = Math.max(0, Math.floor(x));
+  const y0 = Math.max(0, Math.floor(y));
+  const x1 = Math.min(W, Math.ceil(x + w));
+  const y1 = Math.min(H, Math.ceil(y + h));
+  for (let yy = y0; yy < y1; yy++) {
+    for (let xx = x0; xx < x1; xx++) {
+      const i = (yy * W + xx) * 3;
+      px[i] = c[0];
+      px[i + 1] = c[1];
+      px[i + 2] = c[2];
+    }
   }
 }
 
-function hline(x0: number, x1: number, y: number, c: number, t = 1): void {
-  for (let t0 = 0; t0 < t; t0++) {
-    for (let x = x0; x <= x1; x++) px(x, y + t0, c);
-  }
-}
-
-function vline(x: number, y0: number, y1: number, c: number, t = 1): void {
-  for (let t0 = 0; t0 < t; t0++) {
-    for (let y = y0; y <= y1; y++) px(x + t0, y, c);
-  }
-}
-
-// Bresenham line.
-function line(x0: number, y0: number, x1: number, y1: number, c: number): void {
+function drawLine(x0: number, y0: number, x1: number, y1: number, c: number[], t: number): void {
   const dx = Math.abs(x1 - x0);
   const dy = -Math.abs(y1 - y0);
   const sx = x0 < x1 ? 1 : -1;
@@ -108,8 +104,9 @@ function line(x0: number, y0: number, x1: number, y1: number, c: number): void {
   let err = dx + dy;
   let x = x0;
   let y = y0;
+  const half = Math.floor(t / 2);
   for (;;) {
-    px(x, y, c);
+    fillRect(x - half, y - half, t, t, c);
     if (x === x1 && y === y1) break;
     const e2 = 2 * err;
     if (e2 >= dy) {
@@ -123,102 +120,166 @@ function line(x0: number, y0: number, x1: number, y1: number, c: number): void {
   }
 }
 
-// Filled triangle (scanline fill between the two edges).
-function tri(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, c: number): void {
-  const minY = Math.min(y0, y1, y2);
-  const maxY = Math.max(y0, y1, y2);
+// Fill a triangle by scanning horizontal spans between its edges.
+function fillTriangle(
+  ax: number, ay: number,
+  bx: number, by: number,
+  cx: number, cy: number,
+  c: number[],
+): void {
+  const minY = Math.max(0, Math.min(ay, by, cy));
+  const maxY = Math.min(H - 1, Math.max(ay, by, cy));
+  const edge = (x0: number, y0: number, x1: number, y1: number, y: number): number => {
+    if (y0 === y1) return x0;
+    return x0 + ((x1 - x0) * (y - y0)) / (y1 - y0);
+  };
   for (let y = minY; y <= maxY; y++) {
     const xs: number[] = [];
-    const edges: Array<[number, number, number, number]> = [
-      [x0, y0, x1, y1],
-      [x1, y1, x2, y2],
-      [x2, y2, x0, y0],
-    ];
-    for (const [ax, ay, bx, by] of edges) {
-      if ((ay <= y && by > y) || (by <= y && ay > y)) {
-        xs.push(ax + ((y - ay) * (bx - ax)) / (by - ay));
-      }
-    }
-    if (xs.length >= 2) {
-      const a = Math.ceil(Math.min(...xs));
-      const b = Math.floor(Math.max(...xs));
-      for (let x = a; x <= b; x++) px(x, y, c);
-    }
+    if (y >= Math.min(ay, by) && y <= Math.max(ay, by)) xs.push(edge(ax, ay, bx, by, y));
+    if (y >= Math.min(by, cy) && y <= Math.max(by, cy)) xs.push(edge(bx, by, cx, cy, y));
+    if (y >= Math.min(cy, ay) && y <= Math.max(cy, ay)) xs.push(edge(cx, cy, ax, ay, y));
+    if (xs.length < 2) continue;
+    const lo = Math.floor(Math.min(xs[0], xs[1], xs[2] ?? xs[0]));
+    const hi = Math.ceil(Math.max(xs[0], xs[1], xs[2] ?? xs[0]));
+    fillRect(lo, y, hi - lo + 1, 1, c);
   }
 }
 
-function circle(cx: number, cy: number, r: number, c: number, fill: boolean): void {
-  if (fill) {
-    for (let y = -r; y <= r; y++) {
-      const half = Math.floor(Math.sqrt(r * r - y * y));
-      for (let x = -half; x <= half; x++) px(cx + x, cy + y, c);
-    }
-    return;
-  }
-  let x = r;
-  let y = 0;
-  let err = 0;
-  while (x >= y) {
-    px(cx + x, cy + y, c);
-    px(cx + y, cy + x, c);
-    px(cx - y, cy + x, c);
-    px(cx - x, cy + y, c);
-    px(cx - x, cy - y, c);
-    px(cx - y, cy - x, c);
-    px(cx + y, cy - x, c);
-    px(cx + x, cy - y, c);
-    y += 1;
-    err += 1 + 2 * y;
-    if (2 * (err - x) + 1 > 0) {
-      x -= 1;
-      err += 1 - 2 * x;
-    }
+function fillCircle(cx: number, cy: number, r: number, c: number[]): void {
+  for (let y = -r; y <= r; y++) {
+    const hw = Math.floor(Math.sqrt(r * r - y * y));
+    fillRect(cx - hw, cy + y, hw * 2 + 1, 1, c);
   }
 }
 
-// ----------------------------------------------------------------- text --
-function charWidth(scale: number): number {
-  return 6 * scale;
+function circleOutline(cx: number, cy: number, r: number, t: number, c: number[]): void {
+  for (let a = 0; a < 360; a += 1) {
+    const rad = (a * Math.PI) / 180;
+    const x = Math.round(cx + r * Math.cos(rad));
+    const y = Math.round(cy + r * Math.sin(rad));
+    fillRect(x - Math.floor(t / 2), y - Math.floor(t / 2), t, t, c);
+  }
 }
+
+// Five-pointed star as a fan of triangles from its centre.
+function drawStar(cx: number, cy: number, r: number, c: number[]): void {
+  const pts: number[][] = [];
+  for (let i = 0; i < 10; i++) {
+    const rad = (i % 2 === 0 ? r : r * 0.42);
+    const ang = (-90 + i * 36) * (Math.PI / 180);
+    pts.push([Math.round(cx + rad * Math.cos(ang)), Math.round(cy + rad * Math.sin(ang))]);
+  }
+  for (let i = 0; i < 10; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % 10];
+    fillTriangle(cx, cy, p1[0], p1[1], p2[0], p2[1], c);
+  }
+}
+
+// Downward bowl of a scale pan.
+function fillPan(cx: number, cy: number, r: number, c: number[]): void {
+  for (let y = 0; y <= r; y++) {
+    const hw = Math.floor(Math.sqrt(Math.max(0, r * r - (r - y) * (r - y))));
+    fillRect(cx - hw, cy + y, hw * 2 + 1, 1, c);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5x7 BITMAP FONT (own design). Each glyph: 7 rows of 5 cells, "#" = ink.
+// ---------------------------------------------------------------------------
+const GLYPHS: Record<string, string[]> = {
+  A: [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+  B: ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+  C: [".####", "#....", "#....", "#....", "#....", "#....", ".####"],
+  D: ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
+  E: ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
+  F: ["#####", "#....", "#....", "####.", "#....", "#....", "#...."],
+  G: [".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."],
+  H: ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+  I: ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"],
+  J: ["..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."],
+  K: ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+  L: ["#....", "#....", "#....", "#....", "#....", "#....", "#####"],
+  M: ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+  N: ["#...#", "##..#", "##..#", "#.#.#", "#..##", "#..##", "#...#"],
+  O: [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+  P: ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
+  Q: [".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"],
+  R: ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
+  S: [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
+  T: ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+  U: ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+  V: ["#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."],
+  W: ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
+  X: ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+  Y: ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+  Z: ["#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"],
+  "0": [".###.", "#..##", "#.#.#", "##..#", "#...#", "#...#", ".###."],
+  "1": ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
+  "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
+  "3": ["####.", "....#", "....#", ".###.", "....#", "....#", "####."],
+  "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
+  "5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
+  "6": [".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."],
+  "7": ["#####", "....#", "...#.", "..#..", "..#..", "..#..", "..#.."],
+  "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
+  "9": [".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."],
+  " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
+  ".": [".....", ".....", ".....", ".....", ".....", ".##..", ".##.."],
+  ",": [".....", ".....", ".....", ".....", ".##..", ".##..", ".#..."],
+  "'": ["..#..", "..#..", ".#...", ".....", ".....", ".....", "....."],
+  "-": [".....", ".....", ".....", ".###.", ".....", ".....", "....."],
+  ":": [".....", ".##..", ".##..", ".....", ".##..", ".##..", "....."],
+  ";": [".....", ".##..", ".##..", ".....", ".##..", ".##..", ".#..."],
+  $: ["..#..", ".####", "#.#..", ".###.", "..#.#", "####.", "..#.."],
+  "%": ["##..#", "##.#.", "...#.", "..#..", ".#...", "#.##.", "#..##"],
+  "(": ["...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#."],
+  ")": [".#...", "..#..", "...#.", "...#.", "...#.", "..#..", ".#..."],
+  "/": ["....#", "...#.", "...#.", "..#..", ".#...", ".#...", "#...."],
+  "!": ["..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."],
+  "?": [".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."],
+  "&": [".##..", "#..#.", "#..#.", ".#...", "#.#.#", "#..#.", ".##.#"],
+  '"': [".#.#.", ".#.#.", ".....", ".....", ".....", ".....", "....."],
+  "+": [".....", "..#..", "..#..", ".###.", "..#..", "..#..", "....."],
+  "=": [".....", ".....", ".###.", ".....", ".###.", ".....", "....."],
+};
 
 function textWidth(s: string, scale: number): number {
-  return s.length * charWidth(scale) - scale; // no trailing gap
+  if (s.length === 0) return 0;
+  return s.length * 6 * scale - scale;
 }
 
-function drawChar(ch: string, x: number, y: number, scale: number, c: number): void {
-  // The font is uppercase only; fold everything to caps at draw time.
-  const g = FONT[ch.toUpperCase()] ?? FONT["?"];
-  for (let row = 0; row < 7; row++) {
-    const bits = g[row];
-    for (let col = 0; col < 5; col++) {
-      if ((bits >> (4 - col)) & 1) {
-        rect(x + col * scale, y + row * scale, scale, scale, c);
+function drawText(s: string, x: number, y: number, scale: number, c: number[]): void {
+  let cx = x;
+  for (const ch of s) {
+    const g = GLYPHS[ch] ?? GLYPHS["?"];
+    for (let r = 0; r < 7; r++) {
+      const row = g[r];
+      for (let col = 0; col < 5; col++) {
+        if (row[col] === "#") {
+          fillRect(cx + col * scale, y + r * scale, scale, scale, c);
+        }
       }
     }
+    cx += 6 * scale;
   }
 }
 
-function drawText(s: string, x: number, y: number, scale: number, c: number): void {
-  for (let i = 0; i < s.length; i++) {
-    drawChar(s[i], x + i * charWidth(scale), y, scale, c);
-  }
-}
-
-function drawTextCentered(s: string, cx: number, y: number, scale: number, c: number): void {
+function drawTextCentered(s: string, cx: number, y: number, scale: number, c: number[]): void {
   drawText(s, cx - Math.floor(textWidth(s, scale) / 2), y, scale, c);
 }
 
-// Greedy word wrap to a pixel width; returns the lines.
-function wrap(s: string, scale: number, maxW: number): string[] {
-  const words = s.split(" ");
+// Greedy word wrap. Returns lines that all fit within maxW.
+function wrapText(text: string, maxW: number, scale: number): string[] {
+  const words = text.split(" ");
   const lines: string[] = [];
   let cur = "";
   for (const w of words) {
-    const test = cur === "" ? w : cur + " " + w;
-    if (textWidth(test, scale) <= maxW || cur === "") {
-      cur = test;
+    const trial = cur === "" ? w : cur + " " + w;
+    if (textWidth(trial, scale) <= maxW) {
+      cur = trial;
     } else {
-      lines.push(cur);
+      if (cur !== "") lines.push(cur);
       cur = w;
     }
   }
@@ -226,24 +287,274 @@ function wrap(s: string, scale: number, maxW: number): string[] {
   return lines;
 }
 
-// Draw wrapped text in a box; returns the y just below the last line.
-function drawPara(s: string, x: number, y: number, scale: number, maxW: number, lh: number, c: number): number {
-  const lines = wrap(s, scale, maxW);
+function drawWrapped(
+  text: string,
+  x: number,
+  y: number,
+  maxW: number,
+  scale: number,
+  lineH: number,
+  c: number[],
+): number {
+  const lines = wrapText(text, maxW, scale);
   for (let i = 0; i < lines.length; i++) {
-    drawText(lines[i], x, y + i * lh, scale, c);
+    drawText(lines[i], x, y + i * lineH, scale, c);
   }
-  return y + lines.length * lh;
+  return y + lines.length * lineH;
 }
 
-// ------------------------------------------------------------ PNG out --
+// ---------------------------------------------------------------------------
+// ILLUSTRATIONS
+// ---------------------------------------------------------------------------
+
+// Lead: Peace Palace (pediment + columns + steps) with scales of justice.
+function drawLeadArt(x0: number, y0: number, x1: number, y1: number): void {
+  const cx = Math.floor((x0 + x1) / 2);
+  // Pediment triangle.
+  fillTriangle(x0 + 6, y0 + 78, x1 - 6, y0 + 78, cx, y0 + 6, INK);
+  fillCircle(cx, y0 + 56, 9, PAPER);
+  circleOutline(cx, y0 + 56, 9, 3, PAPER,);
+  // Entablature band.
+  fillRect(x0 + 2, y0 + 78, x1 - x0 - 4, 12, INK);
+  // Five columns.
+  const colW = 20;
+  const span = x1 - x0 - 16;
+  for (let i = 0; i < 5; i++) {
+    const colX = x0 + 8 + Math.round((i * (span - colW)) / 4);
+    fillRect(colX, y0 + 90, colW, 76, INK);
+  }
+  // Base + steps.
+  fillRect(x0 + 2, y0 + 166, x1 - x0 - 4, 8, INK);
+  fillRect(x0 + 12, y0 + 174, x1 - x0 - 24, 6, GREY);
+  fillRect(x0 + 22, y0 + 180, x1 - x0 - 44, 6, GREY);
+  // Scales of justice.
+  const poleTop = y0 + 196;
+  const poleBot = y1 - 8;
+  fillRect(cx - 3, poleTop, 6, poleBot - poleTop, INK);
+  fillRect(cx - 52, poleTop, 104, 5, INK);
+  fillCircle(cx, poleTop - 2, 6, INK);
+  for (const side of [-1, 1]) {
+    const panCx = cx + side * 46;
+    const beamY = poleTop + 5;
+    drawLine(panCx, beamY, panCx - 16, beamY + 30, INK, 2);
+    drawLine(panCx, beamY, panCx + 16, beamY + 30, INK, 2);
+    fillPan(panCx, beamY + 30, 17, INK);
+  }
+}
+
+// Story 2: three large national flags over a summit table line.
+function drawFlags(x: number, y: number, w: number, h: number): void {
+  const fw = Math.floor((w - 22) / 3);
+  const fh = h;
+  // --- United States: stars and stripes.
+  const ux = x;
+  const stripeH = Math.max(3, Math.floor(fh / 13));
+  for (let i = 0; i < 13; i++) {
+    fillRect(ux, y + i * stripeH, fw, stripeH, i % 2 === 0 ? RED : PAPER);
+  }
+  fillRect(ux, y, Math.floor(fw * 0.42), stripeH * 7, BLUE);
+  for (let r = 0; r < 4; r++) {
+    for (let cIdx = 0; cIdx < 5; cIdx++) {
+      fillRect(
+        ux + 5 + cIdx * 12,
+        y + 4 + r * 8,
+        3, 3, PAPER,
+      );
+    }
+  }
+  // --- China: red field, one big yellow star + four small ones.
+  const cx = x + fw + 11;
+  fillRect(cx, y, fw, fh, RED);
+  drawStar(cx + 26, y + 18, 12, YELLOW);
+  drawStar(cx + 58, y + 10, 5, YELLOW);
+  drawStar(cx + 72, y + 22, 5, YELLOW);
+  drawStar(cx + 72, y + 38, 5, YELLOW);
+  drawStar(cx + 58, y + 48, 5, YELLOW);
+  // --- Russia: white, blue, red horizontal bands.
+  const rx = x + 2 * (fw + 11);
+  const bandH = Math.floor(fh / 3);
+  fillRect(rx, y, fw, bandH, PAPER);
+  fillRect(rx, y + bandH, fw, bandH, BLUE);
+  fillRect(rx, y + 2 * bandH, fw, fh - 2 * bandH, RED);
+  // Thin ink frame around each flag + summit table line below.
+  for (const fx of [ux, cx, rx]) {
+    fillRect(fx, y, fw, 2, INK);
+    fillRect(fx, y + fh - 2, fw, 2, INK);
+    fillRect(fx, y, 2, fh, INK);
+    fillRect(fx + fw - 2, y, 2, fh, INK);
+  }
+  fillRect(x, y + fh + 4, w, 3, INK);
+}
+
+// Story 3: rising bar chart with ANT $83 ticker and an upward arrow.
+function drawChart(x: number, y: number, w: number, h: number): void {
+  const baseY = y + h - 4;
+  const heights = [12, 20, 28, 38, 48];
+  const bw = 52;
+  const gap = 14;
+  for (let i = 0; i < heights.length; i++) {
+    const bx = x + i * (bw + gap);
+    fillRect(bx, baseY - heights[i], bw, heights[i], INK);
+  }
+  // Axis.
+  fillRect(x, baseY, w - 130, 3, INK);
+  // Upward arrow over the bars.
+  drawLine(x + 8, baseY - 16, x + w - 150, y + 4, INK, 3);
+  drawLine(x + w - 150, y + 4, x + w - 168, y + 6, INK, 3);
+  drawLine(x + w - 150, y + 4, x + w - 152, y + 20, INK, 3);
+  // Ticker label, top right.
+  drawText("ANT $83", x + w - 126, y + 8, 3, INK);
+  drawText("NASDAQ", x + w - 126, y + 36, 2, GREY);
+}
+
+// Story 4: Vice City skyline with palm trees and a big 99 badge.
+function drawSkyline(x: number, y: number, w: number, h: number): void {
+  const baseY = y + h - 2;
+  const buildings: number[][] = [
+    [0, 26, 46], [52, 40, 40], [98, 30, 52], [156, 48, 44],
+    [206, 34, 40], [252, 22, 46], [304, 38, 36],
+  ];
+  for (const b of buildings) {
+    const bx = x + b[0];
+    const bh = b[1];
+    const bw = b[2];
+    fillRect(bx, baseY - bh, bw, bh, INK);
+    // Windows.
+    for (let wy = baseY - bh + 6; wy < baseY - 6; wy += 10) {
+      for (let wx = bx + 6; wx < bx + bw - 5; wx += 11) {
+        fillRect(wx, wy, 4, 5, PAPER);
+      }
+    }
+  }
+  // Palm tree: tall leaning trunk, five long drooping fronds, two coconuts.
+  const px0 = x + 352;
+  const pTopX = px0 + 8;
+  const pTopY = baseY - 50;
+  drawLine(px0, baseY, pTopX, pTopY, INK, 4);
+  const fronds: number[][] = [
+    [pTopX - 26, pTopY - 6], [pTopX - 16, pTopY - 16], [pTopX, pTopY - 20],
+    [pTopX + 16, pTopY - 14], [pTopX + 26, pTopY - 4],
+  ];
+  for (const f of fronds) {
+    drawLine(pTopX, pTopY, f[0], f[1], INK, 2);
+    drawLine(f[0], f[1], f[0] + (f[0] < pTopX ? -6 : 6), f[1] + 10, INK, 2);
+  }
+  fillCircle(pTopX - 4, pTopY + 3, 3, INK);
+  fillCircle(pTopX + 4, pTopY + 3, 3, INK);
+  // Big 99 badge.
+  const bcx = x + w - 44;
+  const bcy = y + Math.floor(h / 2);
+  fillCircle(bcx, bcy, 27, PAPER);
+  circleOutline(bcx, bcy, 27, 4, INK);
+  drawTextCentered("99", bcx, bcy - 14, 4, INK);
+}
+
+// Story 5: bold flame over a city building, DHAKA label.
+function drawFlame(x: number, y: number, w: number, h: number): void {
+  const baseY = y + h - 2;
+  // City buildings along the bottom.
+  const buildings: number[][] = [
+    [0, 18, 60], [66, 26, 54], [126, 16, 66], [198, 24, 58],
+  ];
+  for (const b of buildings) {
+    const bx = x + b[0];
+    fillRect(bx, baseY - b[1], b[2], b[1], INK);
+    for (let wy = baseY - b[1] + 5; wy < baseY - 4; wy += 9) {
+      for (let wx = bx + 6; wx < bx + b[2] - 5; wx += 12) {
+        fillRect(wx, wy, 4, 4, PAPER);
+      }
+    }
+  }
+  // Flame above the middle building: a tall teardrop with a flick.
+  const fx = x + 128;
+  const fy = baseY - 16;
+  fillCircle(fx, fy - 14, 17, ORANGE);
+  fillTriangle(fx - 17, fy - 6, fx + 17, fy - 6, fx + 2, y + 4, ORANGE);
+  fillTriangle(fx - 17, fy, fx + 17, fy, fx, fy - 30, ORANGE);
+  fillCircle(fx, fy - 6, 8, YELLOW);
+  fillTriangle(fx - 8, fy, fx + 8, fy, fx, fy - 18, YELLOW);
+  // DHAKA label, right side.
+  drawText("DHAKA", x + w - 100, y + 8, 3, INK);
+  drawText("LOCKDOWN", x + w - 100, y + 36, 2, GREY);
+}
+
+// ---------------------------------------------------------------------------
+// PAGE LAYOUT
+// ---------------------------------------------------------------------------
+function rule(x0: number, x1: number, y: number, t: number): void {
+  fillRect(x0, y, x1 - x0, t, INK);
+}
+
+function drawPage(): void {
+  fillRect(0, 0, W, H, PAPER);
+
+  // Masthead.
+  rule(28, 996, 16, 3);
+  drawTextCentered("WORLD NEWS", 512, 30, 9, INK);
+  rule(28, 996, 102, 2);
+  drawTextCentered("THURSDAY, 19 NOVEMBER 2026", 512, 114, 3, INK);
+  rule(28, 996, 144, 2);
+
+  // ---- Lead story (full width, art on the right) ----
+  drawText(LEAD_KICKER, 28, 158, 2, GREY);
+  drawWrapped(LEAD_HEADLINE, 28, 182, 640, 5, 42, INK);
+  drawWrapped(LEAD_DECK, 28, 278, 640, 2, 17, INK);
+  drawWrapped(LEAD_FACTS, 28, 372, 640, 2, 17, INK);
+  drawLeadArt(690, 158, 996, 406);
+
+  rule(28, 996, 420, 3);
+
+  // ---- 2x2 grid ----
+  const colW = 472;
+  const colA = 28;
+  const colB = 524;
+  const row1 = 432;
+  const row2 = 638;
+  // Dividers.
+  fillRect(510, 430, 2, 380, INK);
+  rule(28, 996, 626, 2);
+
+  const drawCell = (
+    cx0: number, cy0: number,
+    kicker: string, headline: string, deck: string,
+    art: (x: number, y: number, w: number, h: number) => void,
+  ): void => {
+    drawText(kicker, cx0, cy0, 2, GREY);
+    drawWrapped(headline, cx0, cy0 + 20, colW, 3, 25, INK);
+    art(cx0, cy0 + 74, colW, 54);
+    drawWrapped(deck, cx0, cy0 + 134, colW, 2, 17, INK);
+  };
+
+  drawCell(colA, row1, STORY2_KICKER, STORY2_HEADLINE, STORY2_DECK, drawFlags);
+  drawCell(colB, row1, STORY3_KICKER, STORY3_HEADLINE, STORY3_DECK, drawChart);
+  drawCell(colA, row2, STORY4_KICKER, STORY4_HEADLINE, STORY4_DECK, drawSkyline);
+  drawCell(colB, row2, STORY5_KICKER, STORY5_HEADLINE, STORY5_DECK, drawFlame);
+
+  // ---- IN BRIEF strip ----
+  rule(28, 996, 820, 3);
+  drawText("IN BRIEF", 28, 834, 3, INK);
+  let by = 866;
+  for (const item of BRIEFS) {
+    fillRect(28, by + 3, 9, 9, INK);
+    drawText(item, 48, by, 2, INK);
+    by += 24;
+  }
+  rule(28, 996, 994, 3);
+}
+
+// ---------------------------------------------------------------------------
+// PNG ENCODER (own implementation: chunks + CRC32; deflate via node:zlib)
+// ---------------------------------------------------------------------------
 const CRC_TABLE: number[] = (() => {
-  const t: number[] = [];
+  const table: number[] = [];
   for (let n = 0; n < 256; n++) {
     let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t.push(c >>> 0);
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c >>> 0;
   }
-  return t;
+  return table;
 })();
 
 function crc32(buf: Buffer): number {
@@ -254,272 +565,43 @@ function crc32(buf: Buffer): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-function chunk(type: string, data: Buffer): Buffer {
+function pngChunk(type: string, data: Buffer): Buffer {
   const len = Buffer.alloc(4);
   len.writeUInt32BE(data.length, 0);
-  const td = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const typeBuf = Buffer.from(type, "ascii");
   const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(td), 0);
-  return Buffer.concat([len, td, crc]);
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
+  return Buffer.concat([len, typeBuf, data, crc]);
 }
 
 function encodePNG(): Buffer {
+  const raw = Buffer.alloc(H * (1 + W * 3));
+  for (let y = 0; y < H; y++) {
+    raw[y * (1 + W * 3)] = 0; // filter: none
+    raw.set(px.subarray(y * W * 3, (y + 1) * W * 3), y * (1 + W * 3) + 1);
+  }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(W, 0);
   ihdr.writeUInt32BE(H, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 0; // grayscale
-  ihdr[10] = 0; // deflate
-  ihdr[11] = 0; // no interlace
-  const raw = Buffer.alloc(H * (W + 1));
-  for (let y = 0; y < H; y++) {
-    raw[y * (W + 1)] = 0; // filter: none
-    fb.copy(raw, y * (W + 1) + 1, y * W, (y + 1) * W);
-  }
+  ihdr[9] = 2; // colour type: truecolour RGB
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
   const idat = zlib.deflateSync(raw, { level: 9 });
-  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  return Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", Buffer.alloc(0))]);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", idat),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
 }
 
-// ---------------------------------------------------------- pictograms --
-// Small drawn pictures, one per story, built from rectangles, lines and
-// triangles only. Each takes the box (x, y, w, h) it may draw inside.
-
-// 1. Courthouse: pediment, four columns, steps.
-function picCourthouse(x: number, y: number, w: number, h: number): void {
-  const cx = x + Math.floor(w / 2);
-  tri(cx - 62, y + 42, cx + 62, y + 42, cx, y + 6, INK);
-  circle(cx, y + 26, 7, PAPER, true);
-  circle(cx, y + 26, 7, INK, false);
-  rect(x + 8, y + 42, w - 16, 5, INK);
-  for (let i = 0; i < 4; i++) {
-    const colX = x + 22 + i * 42;
-    rect(colX, y + 50, 12, 52, INK);
-    rect(colX - 3, y + 47, 18, 4, INK);
-    rect(colX - 3, y + 102, 18, 4, INK);
-  }
-  rect(x + 8, y + 110, w - 16, 5, INK);
-  rect(x + 20, y + 118, w - 40, 4, SOFT);
-  rect(x + 32, y + 124, w - 64, 4, SOFT);
-}
-
-// 2. Bridge over water, deck broken in the middle.
-function picBridge(x: number, y: number, w: number, h: number): void {
-  const deckY = y + 16;
-  rect(x, deckY, 150, 5, INK);
-  rect(x + w - 150, deckY, 150, 5, INK);
-  // the fallen middle span, tilted into the water
-  line(x + 152, deckY + 4, x + w - 152, deckY + 26, INK);
-  line(x + 152, deckY + 8, x + w - 152, deckY + 30, INK);
-  // towers
-  rect(x + 96, y + 2, 8, 34, INK);
-  rect(x + w - 104, y + 2, 8, 34, INK);
-  line(x + 100, y + 2, x + 148, deckY, INK);
-  line(x + w - 100, y + 2, x + w - 148, deckY, INK);
-  // water
-  for (let i = 0; i < 3; i++) {
-    const wy = deckY + 30 + i * 8;
-    for (let wx = x + 6; wx < x + w - 6; wx += 26) {
-      hline(wx, wx + 14, wy, SOFT, 2);
-    }
-  }
-}
-
-// 3. Rising bars and an arrow: a record market debut.
-function picChart(x: number, y: number, w: number, h: number): void {
-  const baseY = y + h - 8;
-  hline(x, x + w - 4, baseY, INK, 3);
-  vline(x, y + 4, baseY, INK, 3);
-  const bars = [14, 24, 20, 34, 44];
-  for (let i = 0; i < bars.length; i++) {
-    const bx = x + 44 + i * 78;
-    rect(bx, baseY - bars[i], 40, bars[i], INK);
-  }
-  line(x + 44, baseY - 12, x + w - 30, y + 6, INK);
-  line(x + w - 30, y + 6, x + w - 52, y + 8, INK);
-  line(x + w - 30, y + 6, x + w - 32, y + 26, INK);
-}
-
-// 4. Three flags on poles.
-function picFlags(x: number, y: number, w: number, h: number): void {
-  const baseY = y + h - 6;
-  const flag = (fx: number, fy: number, kind: number): void => {
-    vline(fx, fy, baseY, INK, 3);
-    rect(fx + 3, fy, 108, 24, INK);
-    if (kind === 0) {
-      // stripes
-      for (let s = 0; s < 3; s++) rect(fx + 3, fy + 4 + s * 8, 108, 4, PAPER);
-      rect(fx + 3, fy, 34, 14, INK);
-    } else if (kind === 1) {
-      // stars field: five dots
-      const dots: Array<[number, number]> = [[14, 6], [30, 6], [46, 6], [22, 15], [38, 15]];
-      for (const [dx, dy] of dots) rect(fx + 3 + dx, fy + dy, 4, 4, PAPER);
-    } else {
-      // disc
-      circle(fx + 57, fy + 12, 8, PAPER, true);
-    }
-  };
-  flag(x + 20, y + 6, 0);
-  flag(x + 170, y + 2, 1);
-  flag(x + 320, y + 6, 2);
-}
-
-// 5. City skyline at dusk with a palm.
-function picCity(x: number, y: number, w: number, h: number): void {
-  const groundY = y + h - 6;
-  circle(x + w - 70, y + 14, 10, INK, true);
-  const heights = [26, 40, 30, 46, 34, 22, 38];
-  let bx = x + 8;
-  for (let i = 0; i < heights.length; i++) {
-    const bw = 46;
-    rect(bx, groundY - heights[i], bw, heights[i], INK);
-    for (let wy = groundY - heights[i] + 6; wy < groundY - 6; wy += 10) {
-      for (let wx = bx + 6; wx < bx + bw - 6; wx += 12) {
-        rect(wx, wy, 4, 4, PAPER);
-      }
-    }
-    bx += bw + 8;
-  }
-  // palm, in the clear space right of the last building
-  const px0 = x + w - 44;
-  line(px0, groundY, px0 + 8, groundY - 30, INK);
-  line(px0 + 8, groundY - 30, px0 - 8, groundY - 38, INK);
-  line(px0 + 8, groundY - 30, px0 + 24, groundY - 38, INK);
-  line(px0 + 8, groundY - 30, px0 + 2, groundY - 44, INK);
-  line(px0 + 8, groundY - 30, px0 + 16, groundY - 44, INK);
-  hline(x, x + w - 4, groundY, INK, 3);
-}
-
-// -------------------------------------------------------------- content --
-// The day's news, as reported on Thursday 19 November 2026. All caps,
-// plain ASCII only (the font has no lowercase).
-
-const LEAD_KICKER = "THE HAGUE - INTERNATIONAL JUSTICE";
-const LEAD_HEAD = "WORLD COURT TO RULE ON ROHINGYA GENOCIDE TODAY";
-const LEAD_BODY =
-  "The International Court of Justice delivers its verdict today in The Gambia's case against " +
-  "Myanmar over the 2017 crackdown on the Rohingya. The court has never before found a state " +
-  "guilty of genocide, and the judgment is final. More than one million Rohingya remain in Bangladesh.";
-
-interface Story {
-  kicker: string;
-  head: string;
-  body: string;
-  pic: (x: number, y: number, w: number, h: number) => void;
-}
-
-const STORIES: Story[] = [
-  {
-    kicker: "UKRAINE - WAR",
-    head: "KERCH BRIDGE HIT FOR A THIRD TIME IN A WEEK",
-    body:
-      "Traffic halted again after a fresh overnight strike on the Crimean Bridge. " +
-      "Crimea's head confirmed the attack; damage is being assessed.",
-    pic: picBridge,
-  },
-  {
-    kicker: "TECHNOLOGY - MARKETS",
-    head: "ANTHROPIC PRICES RECORD $81BN IPO",
-    body:
-      "The Claude AI maker priced its listing at $83 a share, raising $81.3 billion, " +
-      "the largest debut on record. Trading starts today as ANT.",
-    pic: picChart,
-  },
-  {
-    kicker: "CHINA - DIPLOMACY",
-    head: "TRUMP, XI AND PUTIN MEET IN SHENZHEN",
-    body:
-      "The U.S., Chinese and Russian leaders meet today in Shenzhen for their first " +
-      "trilateral talks. Nuclear arms, Ukraine and Iran are on the agenda.",
-    pic: picFlags,
-  },
-  {
-    kicker: "CULTURE - GAMES",
-    head: "VICE CITY OPENS AS GTA VI ROLLS OUT",
-    body:
-      "After 13 years, Grand Theft Auto VI began its global rollout at midnight, starting in " +
-      "New Zealand. Early reviews give it 99 on Metacritic.",
-    pic: picCity,
-  },
-];
-
-const BRIEFS: string[] = [
-  "WASHINGTON - HOUSE DEMOCRATS NOMINATED HAKEEM JEFFRIES, 251-11, FOR SPEAKER. IF ELECTED ON JAN. 3, HE WOULD BE THE FIRST BLACK SPEAKER IN U.S. HISTORY.",
-  "SPACE - NASA EXPECTS TO CONFIRM TODAY THAT VOYAGER 1, LAUNCHED IN 1977, HAS REACHED ONE LIGHT-DAY FROM EARTH, A FIRST FOR ANY HUMAN-MADE OBJECT.",
-  "FAITH - ISLAM IS ON TRACK TO BECOME THE WORLD'S LARGEST RELIGION BY 2035, A PEW RESEARCH PROJECTION SAYS, PASSING CHRISTIANITY ON HIGHER BIRTH RATES.",
-  "BRUSSELS - THE EU PROPOSED A 45 BILLION EURO LOAN TO UKRAINE, TO BE REPAID AFTER RUSSIA PAYS REPARATIONS, THE FINANCIAL TIMES REPORTED.",
-];
-
-// --------------------------------------------------------------- layout --
-const M = 36; // side margin
-const CW = W - 2 * M; // 952 content width
-
-function rule(y: number): void {
-  hline(M, W - M - 1, y, INK, 2);
-}
-
-function drawStory(st: Story, x: number, y0: number, w: number): void {
-  // kicker
-  drawText(st.kicker, x, y0, 2, INK);
-  // headline, scale 3, two lines
-  const headLines = wrap(st.head, 3, w);
-  for (let i = 0; i < headLines.length; i++) {
-    drawText(headLines[i], x, y0 + 20 + i * 26, 3, INK);
-  }
-  // picture
-  const picY = y0 + 78;
-  st.pic(x, picY, w, 56);
-  // body, scale 2
-  drawPara(st.body, x, picY + 64, 2, w, 17, INK);
-}
-
-function build(): void {
-  // ---- masthead
-  rule(24);
-  drawTextCentered("WORLD NEWS", W / 2, 36, 9, INK);
-  rule(108);
-  drawTextCentered("THURSDAY, 19 NOVEMBER 2026", W / 2, 122, 3, INK);
-  rule(150);
-
-  // ---- lead story: courthouse picture on the right
-  drawText(LEAD_KICKER, M, 166, 2, INK);
-  const leadTextW = 744;
-  const leadHead = wrap(LEAD_HEAD, 4, leadTextW);
-  for (let i = 0; i < leadHead.length; i++) {
-    drawText(leadHead[i], M, 192 + i * 32, 4, INK);
-  }
-  picCourthouse(800, 166, 188, 134);
-  drawPara(LEAD_BODY, M, 264, 2, leadTextW, 17, INK);
-  rule(362);
-
-  // ---- two-by-two grid
-  const colW = 464;
-  const col2X = M + colW + 24;
-  vline(M + colW + 12, 378, 818, SOFT, 1);
-  drawStory(STORIES[0], M, 378, colW);
-  drawStory(STORIES[1], col2X, 378, colW);
-  drawStory(STORIES[2], M, 602, colW);
-  drawStory(STORIES[3], col2X, 602, colW);
-
-  // ---- in brief
-  rule(830);
-  drawText("IN BRIEF", M, 842, 3, INK);
-  let by = 872;
-  for (const b of BRIEFS) {
-    by = drawPara(b, M, by, 2, CW, 16, INK) + 4;
-  }
-}
-
-// ------------------------------------------------------------------ main --
-function main(): void {
-  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-  fs.mkdirSync(outDir, { recursive: true });
-  build();
-  const png = encodePNG();
-  const outPath = path.join(outDir, "entry.png");
-  fs.writeFileSync(outPath, png);
-  const sha = crypto.createHash("sha256").update(png).digest("hex");
-  console.log(`wrote ${outPath} (${png.length} bytes, sha256 ${sha})`);
-}
-
-main();
+// ---------------------------------------------------------------------------
+// MAIN
+// ---------------------------------------------------------------------------
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+fs.mkdirSync(outDir, { recursive: true });
+drawPage();
+const png = encodePNG();
+fs.writeFileSync(path.join(outDir, "entry.png"), png);
